@@ -65,9 +65,14 @@ BTC/USD responds to several channels whose strength changes over time. All agent
   - US spot Bitcoin ETFs, trading since 11 January 2024: daily net creations and redemptions, published after the US close.
   - Corporate treasury buyers, disclosed in SEC 8-K filings.
   - Sovereign policy, e.g., the US Strategic Bitcoin Reserve order of 6 March 2025.
+- **Halving and the four-year cycle:** every 210,000 blocks, the new-coin reward per block halves.
+  - Past halvings: 28 November 2012 (block 210,000), 9 July 2016 (420,000), 11 May 2020 (630,000) and 20 April 2024 (840,000). The next is block 1,050,000, expected around 2028; re-estimate the date from recent block times.
+  - So far, cycle highs came about 12–18 months after each halving: December 2013, December 2017, November 2021 and October 2025. Cycle lows came about a year after the high: January 2015, December 2018 and November 2022. The falls from high to low were about 85%, 84% and 77%.
+  - There are only four completed cycles. That is far too few to fit anything, and it's easy to overfit. Treat the cycle as a weak prior that the data can override, never as a timing signal.
+  - The pattern may be fading or may be a self-fulfilling belief. New-coin issuance is now small next to spot-ETF flows. Let the data decide whether cycle phase still matters, and test each side of the January 2024 ETF launch separately.
+  - Never encode an expected cycle high, low or date. The honesty rule applies.
 - **Supply and overhang:**
-  - the halving schedule (block-height based: April 2024 at block 840,000; the next at block 1,050,000);
-  - miner flows and hashprice;
+  - miner flows, hashprice, and mining difficulty, which resets every 2,016 blocks (about two weeks);
   - government and bankruptcy-estate distributions (e.g., German government sales and Mt. Gox repayments in mid-2024);
   - long-term-holder distribution.
 - **Leverage and positioning:**
@@ -263,8 +268,15 @@ Classifies the market state, forecasts forward volatility cones and decides whic
   - mean-reversion sleeve only in chop;
   - both off, or at minimum size, in crisis-deleveraging;
   - trend core at reduced size with tighter trailing stops in leverage-euphoria.
+- **Cycle-phase prior:** use only values that were knowable at the time:
+  - days since the last halving, taken from block height;
+  - drawdown from the all-time high so far (running maximum);
+  - days since that high;
+  - optionally, price relative to on-chain realized price. Use that metric only if you stored each vintage.
+
+  Let these nudge how likely the HMM is to move from one regime to another, through a single heavily shrunk parameter. They must never be HMM emission features, and never entry triggers. Never label phases such as "post-top bear" with hindsight: whether a high was the cycle top is only known later.
 - **GARCH:** fit GJR-GARCH or EGARCH with Student-t errors, Tier-1 event dummies and a weekend dummy. Don't assume the equity leverage effect; BTC has at times shown the inverted pattern, with volatility rising on rallies. Let the estimated sign decide.
-- **Foundation models:** Chronos or TimeGPT, zero-shot, for 1-hour, 1-day and 5-day quantile cones. Chronos-2 accepts known-future covariates, so pass event-calendar, session, weekend, funding-time and expiry flags. The original Chronos and Chronos-Bolt don't support covariates natively.
+- **Foundation models:** Chronos or TimeGPT, zero-shot, for 1-hour, 1-day and 5-day quantile cones. Chronos-2 accepts known-future covariates, so pass event-calendar, session, weekend, funding-time and expiry flags, plus days since the last halving. The halving is a known future event, though its exact time depends on how fast blocks arrive. The original Chronos and Chronos-Bolt don't support covariates natively.
 - **Contamination check:** Bitcoin's price history is among the most widely published series, so assume it is in pretraining data. Score the cones on data after each model's release, against a GARCH baseline, before they influence sizing.
 
 ---
@@ -282,6 +294,7 @@ Turns approved signals into unleveraged position sizes and protects the equity c
 - **Equity-curve breakers:** halve size after 3 consecutive losses or a rolling drawdown past a threshold, then apply a cooling period.
   - Calibrate the threshold from the strategy's own out-of-sample trades (e.g., the 95th percentile of rolling 10-trade drawdowns) instead of a fixed 3%.
   - Count cooling periods in liquidity-weighted sessions rather than clock hours, so a quiet weekend doesn't use them up. For example, use 8-hour Asia/Europe/US blocks, with a weekend block counting [0.5].
+- **Cycle-phase risk scaler (optional, off by default):** fix the rule in advance and keep it to cutting risk, bounded at [0.5]×–1.0× of base risk. For example, cut risk when the drawdown from the all-time high so far is deep and Agent 4 is in crisis-deleveraging. It can never raise size. Keep it only if it passes the leave-one-cycle-out and placebo tests in Part 2.
 - **Stops:** adaptive GARCH/ATR trailing stops, plus a disaster stop always resting at XM.
 - **Weekend and gap policy:**
   - Intraday mode is flat before Friday 21:00 UTC and before any announced XM maintenance.
@@ -332,7 +345,14 @@ Build this first. No agent is trusted until it passes here.
   - Prefer parameter plateaus, where results hold within ±20% of each value.
   - Report the Deflated Sharpe Ratio and the Probability of Backtest Overfitting (CSCV).
   - Report results separately on each side of the structural breaks: the CME futures launch (December 2017), the US spot-ETF launch (11 January 2024) and CME's move to 24/7 trading (29 May 2026).
-- **Regime coverage:** report bull, bear and range years separately, plus long-only and short-only P&L. Bear tests must include 2018, 2022 and the decline since the 6 October 2025 all-time high.
+- **Regime coverage:** report bull, bear and range years separately, plus long-only and short-only P&L. Bear tests must include 2014–2015 (on Bitstamp history, which was thin, so widen the cost-uncertainty bands), 2018, 2022 and the decline since the 6 October 2025 all-time high.
+- **Halving-cycle analysis:**
+  - Report P&L, drawdown and exposure separately for each phase: halving to cycle high, high to low, and low to the next halving. Draw the phase boundaries afterwards, for the report only, never as model inputs.
+  - Compare each cycle with buy-and-hold over the same cycle.
+  - Run leave-one-cycle-out tests: tune on three cycles and test on the fourth. A 2-year training window is shorter than one cycle, so ordinary walk-forward can't judge a cycle feature.
+  - Run a placebo test: move the halving dates to random points and check that any lift from the cycle features goes away.
+  - Show that the strategy's edge isn't simply one bet on cycle timing: remove the cycle features and report the change.
+  - With only four cycles, the confidence intervals will be wide. Report them that way.
 - **Named stress replays:**
   - the 17 December 2017 top and the 2018 bear;
   - 12–13 March 2020 "Black Thursday" (BTC roughly halved in two days);
@@ -393,6 +413,7 @@ Every input stores the time it became knowable, not just the time it describes.
 | CFTC Commitments of Traders (TFF, CME Bitcoin) | CFTC website | Friday 15:30 ET release, not Tuesday |
 | Corporate and sovereign treasury activity | SEC EDGAR 8-K and 10-Q; government announcements | EDGAR acceptance time; publication time |
 | Stablecoin supply | Issuer transparency pages; on-chain data | Block first-seen time; retrieval time |
+| Block height, halvings, difficulty | Your own Bitcoin node | Node first-seen time and block height. Halving time is estimated in advance and recorded when it happens |
 | On-chain metrics | Your own Bitcoin node; Glassnode / Coin Metrics | Node first-seen time. Vendor metrics are revised and back-filled, so store each vintage or flag it as look-ahead |
 | News and social | GDELT (free), licensed crypto wire, regulator press releases, X | Publication, retrieval, edit and deletion times |
 | XM symbol specification | MT5 `symbol_info` (volume limits, stops level, margin, swaps, trade mode) | Poll time; log every change |
@@ -447,7 +468,7 @@ Every input stores the time it became knowable, not just the time it describes.
 
 - Work one deliverable at a time, and state every assumption.
 - Ask only when a missing parameter blocks the design.
-- Flag any component that cannot be backtested without look-ahead. That includes revised on-chain metrics, liquidation heatmaps and any data without a stored publication time.
+- Flag any component that cannot be backtested without look-ahead. That includes revised on-chain metrics, liquidation heatmaps, cycle-phase labels assigned in hindsight, and any data without a stored publication time.
 - Report no performance number the engine has not produced.
 
 ---
@@ -459,6 +480,7 @@ What changed from the XAU/USD version, and what to check on XM before you fill t
 - **24/7 market:** the daily-break and Sunday-gap rules are replaced by XM rollover/maintenance gaps, weekend thinness and the Sunday-evening macro reopen. Volatility is annualized on 365 days. D1 bars are rebuilt on the UTC day.
 - **Gold drivers replaced:** central-bank gold, LBMA auctions, GVZ and festival demand give way to ETF flows, funding/OI/basis, liquidations, stablecoins, venue risk, regulation and DVOL.
 - **Regimes:** "crisis-liquidation" and "crisis-safe-haven" become "crisis-deleveraging" and "leverage-euphoria squeeze".
+- **Four-year cycle:** the halving cycle is a weak, shrunk prior in Agent 4 and an optional scaler in Agent 5 that can only cut risk. It is tested by leave-one-cycle-out and placebo tests. It is never a timing signal, because there are only four completed cycles.
 - **New gates:** a feed-integrity breaker (XM versus the composite), a venue-stress flag, a liquidation-cascade detector and XM symbol-spec monitoring.
 - **Verify in XM MT5 → Symbol Specification for BTCUSD:** contract size, min/max/step volume, digits, stops and freeze levels, margin rate, swap long/short, swap mode, triple-swap day, trading sessions and maintenance windows. Third-party sources broadly agree that 1 lot = 1 BTC and that the minimum is 0.01 lot with 24/7 trading. They disagree on maximum lot size and leverage.
 - **Verify XM server time** (commonly GMT+2 / GMT+3 with DST) and whether your XM entity offers crypto CFDs in your jurisdiction.

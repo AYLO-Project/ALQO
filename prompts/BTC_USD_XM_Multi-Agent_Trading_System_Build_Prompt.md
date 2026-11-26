@@ -12,10 +12,13 @@ Act as a Principal Quantitative Researcher, Multi-Agent Systems Architect and Al
 
 Treat these parameters as binding. Ask about one only if it is missing and blocks the design.
 
-- **Venue & instrument:** BTCUSD CFD at XM. Symbol name as shown in MT5: [BTCUSD / with suffix]. XM entity: [XM Global / Trading Point (CySEC) / other]. Account type: [Standard / Ultra Low / other that lists crypto].
+- **Venue & instrument:** BTCUSD CFD at XM. Symbol name as shown in MT5: [BTCUSD / with suffix]. XM entity: [XM Global / Trading Point (CySEC) / other]. Account type: [XM Micro] / [XM Standard]. The code must run unchanged on either. Which account is in use is set in config, never assumed in code.
 - **Execution API:** MetaTrader 5, through [the official `MetaTrader5` Python package, which needs a running MT5 terminal on Windows logged in to XM] / [an MQL5 Expert Advisor bridge over sockets or ZeroMQ].
 - **Account:** equity [USD __] · account currency [USD]. If the currency isn't USD, convert P&L at the broker's rate.
-- **Contract size & lot step:** [1 lot = 1 BTC; minimum 0.01 lot = 0.01 BTC; step 0.01; maximum __ lots per order]. Also record the MT5 *stops level*, *freeze level*, price digits, margin rate and swap settings.
+- **Contract size & lot step, per account type:** read these from each account's own MT5 symbol info. They can differ between Micro and Standard, as XM's forex lots do: 1,000 versus 100,000 units.
+  - Micro: symbol [__], 1 lot = [__] BTC, minimum [__] lot, step [__], maximum [__] lots per order and per position.
+  - Standard: symbol [BTCUSD], 1 lot = [1] BTC, minimum [0.01] lot, step [0.01], maximum [__] lots per order and per position.
+  - For each account, also record the MT5 *stops level*, *freeze level*, price digits, margin rate, swap settings, MT5 server name and whether it charges a commission.
 - **Account margin mode:** [hedging / netting], read from `ACCOUNT_MARGIN_MODE`.
 - **Holding horizon:** [intraday, flat before Friday 21:00 UTC and before XM maintenance windows] / [swing, 1–10 days].
 - **Bar stack:** [M1 execution · M5/M15 signals · H1/H4/D1 context]. Build D1 bars on the UTC day from M1 data. XM's own D1 bars open at server midnight, not at 00:00 UTC.
@@ -35,6 +38,11 @@ Treat these parameters as binding. Ask about one only if it is missing and block
    - In a hedging-mode account, long and short tickets both count toward gross notional. The router holds at most one net position per symbol.
    - Near $58,600 (25 November 2026), one 1-BTC lot is about $58,600 notional and the 0.01-lot minimum about $586. Size in BTC and round down to the lot step.
    - If the minimum lot breaches the cap or the risk budget, skip the trade and log it. Report the minimum equity needed to trade the intended sizes.
+   - **Micro or Standard:** smallest BTC per trade = `volume_min` × `trade_contract_size`. For each account type, report:
+     - the smallest equity at which that minimum stays within both the 1.0x cap and the risk budget at the median stop distance;
+     - the share of signals each account type would have to skip.
+
+     Use Micro whenever Standard's minimum would skip trades or round sizes coarsely at your equity. Move to Standard only when your sizes are well above its minimum and below Micro's maximum volume.
 3. **No tabular gradient-boosted trees:** do not use XGBoost, LightGBM or CatBoost on OHLCV or technical-indicator features.
 4. **Approved intelligence stack:**
    - structural market mechanics, including derivatives mechanics: perpetual funding, open interest, futures basis, liquidations and options skew;
@@ -290,6 +298,7 @@ Turns approved signals into unleveraged position sizes and protects the equity c
   - Inverse-ATR volatility parity targets a constant ex-ante daily P&L volatility.
   - Fractional Kelly (≤ 0.25×) uses shrunk, out-of-sample edge estimates.
   - Final size = min(risk budget, vol parity, Kelly, 1.0x notional cap, XM margin limit), rounded down to the lot step and clipped to XM's min and max volume.
+  - Work in BTC throughout. Convert to lots only at the end: lots = BTC ÷ `trade_contract_size` of the active account. Never hard-code 1 lot = 1 BTC. A Micro/Standard contract-size mismatch would mis-size every trade by the ratio between the two.
 - **Conviction multiplier:** bounded at 0.25×–1.5× of base risk when Agents 1, 2 and 4 agree. It can never breach the 1.0x cap.
 - **Equity-curve breakers:** halve size after 3 consecutive losses or a rolling drawdown past a threshold, then apply a cooling period.
   - Calibrate the threshold from the strategy's own out-of-sample trades (e.g., the 95th percentile of rolling 10-trade drawdowns) instead of a fixed 3%.
@@ -336,7 +345,8 @@ Build this first. No agent is trusted until it passes here.
 - **Slippage:** half-spread + size-dependent impact + latency drift.
   - Stops in fast markets fill at the worse of the stop and the next tick, with extra slippage inside Tier-1 windows and detected liquidation cascades.
   - After an XM pause, gaps fill at the first tick.
-- **Costs:** commission per lot if your XM account type charges one, plus nightly swaps according to XM's swap mode and rollover days. Express all of them in bps of price.
+- **Account-specific fitting:** fit the spread, slippage and swap models separately for Micro and Standard, using that account's own ticks and fills. Test whether the two can share one model before merging them.
+- **Costs:** XM Micro and Standard are usually spread-only, so confirm there's no commission per lot. Add nightly swaps according to XM's swap mode and rollover days. Express all of them in bps of price.
 - **Fills:** model partial fills (MT5 IOC/return fill policies), requotes, off-quotes, rejections for market closed, invalid stops or insufficient margin, and stops-level / freeze-level constraints. All of these are more likely during news, cascades and thin liquidity. Calibrate them from XM demo and live logs.
 
 ### Validation & stress suite
@@ -388,7 +398,7 @@ Build this first. No agent is trusted until it passes here.
 
   Bootstrap confidence intervals on ΔCAGR and Δmax drawdown, and drop any agent whose lift interval includes zero.
 - **Paper trading:**
-  1. Shadow-trade an XM demo account for [N] weeks. Demo fills are often better than live fills.
+  1. Shadow-trade an XM demo account of the same type you'll trade live (Micro or Standard) for [N] weeks. Demo fills are often better than live fills.
   2. Run a minimum-size live phase of [M] weeks.
   3. Compare real fills, spreads, swaps and stop executions with the cost model, and recalibrate before scaling up.
 
@@ -429,6 +439,7 @@ Every input stores the time it became knowable, not just the time it describes.
    btc_system/
      configs/          instrument_btcusd_xm.yaml  broker_xm_mt5.yaml  sessions.yaml
                        events.yaml  costs.yaml  risk.yaml
+                       accounts/xm_micro.yaml  accounts/xm_standard.yaml
      data_pipelines/   prices/xm_mt5/  prices/spot_composite/  derivatives/  calendar/
                        news/  macro/  flows/  onchain/  vol/  pit_store/
      agents/           alpha_structure/  news_macro/  calendar_guard/
@@ -450,7 +461,10 @@ Every input stores the time it became knowable, not just the time it describes.
    - a broker simulator with the XM BTCUSD cost model and MT5 symbol constraints (volume min, step and max; stops and freeze levels; swap schedule; trade mode);
    - the router, with the exposure cap, event gates, spread breaker, feed-integrity breaker and equity breakers.
 
-   It must run end to end on a small sample dataset, with unit tests that include the look-ahead test and the server-time-to-UTC conversion test.
+   It must run end to end on a small sample dataset, with unit tests that include:
+   - the look-ahead test;
+   - the server-time-to-UTC conversion test;
+   - a test that the same BTC target produces the correct lots under both the Micro and the Standard symbol specs.
 4. **Config schemas:** YAML for the instrument and XM broker spec, sessions (UTC with DST rules, plus XM server-time rules), event tiers and windows, cost parameters and risk limits.
 5. **Validation report template:** walk-forward table, Monte Carlo distributions, ablation matrix, regime and long/short breakdowns, structural-break splits, buy-and-hold comparison.
 6. **Phased build plan with exit criteria:**
@@ -483,6 +497,7 @@ What changed from the XAU/USD version, and what to check on XM before you fill t
 - **Four-year cycle:** the halving cycle is a weak, shrunk prior in Agent 4 and an optional scaler in Agent 5 that can only cut risk. It is tested by leave-one-cycle-out and placebo tests. It is never a timing signal, because there are only four completed cycles.
 - **New gates:** a feed-integrity breaker (XM versus the composite), a venue-stress flag, a liquidation-cascade detector and XM symbol-spec monitoring.
 - **Verify in XM MT5 → Symbol Specification for BTCUSD:** contract size, min/max/step volume, digits, stops and freeze levels, margin rate, swap long/short, swap mode, triple-swap day, trading sessions and maintenance windows. Third-party sources broadly agree that 1 lot = 1 BTC and that the minimum is 0.01 lot with 24/7 trading. They disagree on maximum lot size and leverage.
+- **Micro vs Standard:** I couldn't confirm XM's BTCUSD specification on the Micro account. Its contract size, symbol suffix, minimum and maximum volume, and even whether crypto is offered on Micro, may differ from Standard. Open the Symbol Specification on each account (demo is fine) and fill both rows.
 - **Verify XM server time** (commonly GMT+2 / GMT+3 with DST) and whether your XM entity offers crypto CFDs in your jurisdiction.
 - **MT5 Python package:** the official `MetaTrader5` package needs a running MT5 terminal on Windows. On Linux you need Wine or a Windows VM.
 
